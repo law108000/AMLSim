@@ -66,3 +66,9 @@ buildNumber.properties
 # another folder that is ignored by vscode
 .settings/
 
+# Training artifacts
+training/models/
+training/falcon-tst/
+*.safetensors
+*.safetensors.index.json
+

@@ -6,20 +6,124 @@ import os
 import sys
 import csv
 import json
+import math
+import fractions
+import warnings
 from collections import Counter, defaultdict
+from datetime import datetime, timedelta
+
+if not hasattr(fractions, "gcd"):
+    fractions.gcd = math.gcd
+
 import networkx as nx
 import powerlaw
-from datetime import datetime, timedelta
 import numpy as np
 
 import matplotlib
 import matplotlib.pyplot as plt
-import warnings
+
+if not hasattr(matplotlib, "cbook") or not hasattr(matplotlib.cbook, "deprecation"):
+    class _DummyDeprecationWarning(Warning):
+        MatplotlibDeprecationWarning = Warning
+
+    if not hasattr(matplotlib, "cbook"):
+        class _DummyCbook:
+            deprecation = _DummyDeprecationWarning
+
+        matplotlib.cbook = _DummyCbook()
+    else:
+        matplotlib.cbook.deprecation = _DummyDeprecationWarning
+
+if not hasattr(matplotlib.cbook, "is_string_like"):
+    def _is_string_like(obj):
+        return isinstance(obj, str)
+
+    matplotlib.cbook.is_string_like = _is_string_like
+
+if not hasattr(matplotlib.cbook, "iterable"):
+    def _iterable(obj):
+        try:
+            iter(obj)
+            return True
+        except TypeError:
+            return False
+
+    matplotlib.cbook.iterable = _iterable
+
+if not hasattr(matplotlib.cbook, "is_numlike"):
+    def _is_numlike(obj):
+        try:
+            float(obj)
+            return True
+        except (TypeError, ValueError):
+            return False
+
+    matplotlib.cbook.is_numlike = _is_numlike
 
 category = matplotlib.cbook.deprecation.MatplotlibDeprecationWarning
 warnings.filterwarnings('ignore', category=category)
 warnings.filterwarnings('ignore', category=UserWarning)
 warnings.filterwarnings('ignore', category=RuntimeWarning)
+
+
+def _field_lookup(fieldnames, *candidates):
+    if not fieldnames:
+        return None
+    lowered = {name.lower(): name for name in fieldnames if name}
+    for cand in candidates:
+        if not cand:
+            continue
+        cand_lower = cand.lower()
+        if cand_lower in lowered:
+            return lowered[cand_lower]
+    return None
+
+
+def _as_bool(value):
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y", "t"}
+    return bool(value)
+
+
+def _parse_date_value(raw_value, base_date):
+    if raw_value is None or raw_value == "":
+        return base_date
+    value = str(raw_value).strip()
+    if not value:
+        return base_date
+    if value.isdigit():
+        return base_date + timedelta(days=int(value))
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        pass
+    if "T" in value:
+        try:
+            return datetime.strptime(value.split("T")[0], "%Y-%m-%d")
+        except ValueError:
+            pass
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return base_date
+
+
+def _resolve_data_path(conf, sim_name, key, *, fallback_key=None, required=True):
+    output_dir = conf.get("output", {}).get("directory", "outputs")
+    temporal_dir = conf.get("temporal", {}).get("directory")
+    primary_name = conf.get("output", {}).get(key)
+    fallback_name = conf.get("temporal", {}).get(fallback_key or key)
+    candidates = []
+    if primary_name:
+        candidates.append(os.path.join(output_dir, sim_name, primary_name))
+    if temporal_dir and fallback_name:
+        candidates.append(os.path.join(temporal_dir, sim_name, fallback_name))
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    if required:
+        raise FileNotFoundError("Could not locate file for '%s'. Tried: %s" % (key, candidates))
+    return None
 
 
 def get_date_list(_g):
@@ -31,75 +135,79 @@ def get_date_list(_g):
     return date_list
 
 
-def construct_graph(_acct_csv, _tx_csv, _schema):
-    """Load transaction CSV file and construct Graph
-    :param _acct_csv: Account CSV file (e.g. output/accounts.csv)
-    :param _tx_csv: Transaction CSV file (e.g. output/transactions.csv)
-    :param _schema: Dict for schema from JSON file
-    :return: Transaction Graph
-    :rtype: nx.MultiDiGraph
-    """
+def construct_graph(_acct_csv, _tx_csv, _schema, _base_date):
+    """Load transaction data (accounts + transactions) and construct Graph."""
+
+    if isinstance(_base_date, str):
+        base_date = datetime.strptime(_base_date, "%Y-%m-%d")
+    else:
+        base_date = _base_date
+
     _g = nx.MultiDiGraph()
 
-    id_idx = None
-    bank_idx = None
-    sar_idx = None
-
-    acct_schema = _schema["account"]
-    for i, col in enumerate(acct_schema):
-        data_type = col.get("dataType")
-        if data_type == "account_id":
-            id_idx = i
-        elif data_type == "bank_id":
-            bank_idx = i
-        elif data_type == "sar_flag":
-            sar_idx = i
-
-    orig_idx = None
-    bene_idx = None
-    type_idx = None
-    amt_idx = None
-    date_idx = None
-
     with open(_acct_csv, "r") as _rf:
-        reader = csv.reader(_rf)
-        next(reader)  # Skip header
+        reader = csv.DictReader(_rf)
+        if not reader.fieldnames:
+            raise ValueError("Account CSV %s has no header" % _acct_csv)
+        acct_field = _field_lookup(reader.fieldnames, "account_id", "acct_id", "accountid")
+        bank_field = _field_lookup(reader.fieldnames, "bank_id", "bankid", "bank")
+        sar_field = _field_lookup(reader.fieldnames, "is_sar", "sar_flag", "sar", "issar")
+
+        if not acct_field:
+            raise ValueError("Could not find account id column in %s" % _acct_csv)
+        if not bank_field:
+            raise ValueError("Could not find bank id column in %s" % _acct_csv)
 
         for row in reader:
-            acct_id = row[id_idx]
-            bank_id = row[bank_idx]
-            is_sar = row[sar_idx].lower() == "true"
+            acct_id = row.get(acct_field)
+            if acct_id is None:
+                continue
+            bank_id = row.get(bank_field, "UNKNOWN")
+            is_sar = _as_bool(row.get(sar_field, False)) if sar_field else False
             _g.add_node(acct_id, bank_id=bank_id, is_sar=is_sar)
 
-    tx_schema = _schema["transaction"]
-    for i, col in enumerate(tx_schema):
-        data_type = col.get("dataType")
-        if data_type == "orig_id":
-            orig_idx = i
-        elif data_type == "dest_id":
-            bene_idx = i
-        elif data_type == "transaction_type":
-            type_idx = i
-        elif data_type == "amount":
-            amt_idx = i
-        elif data_type == "timestamp":
-            date_idx = i
-        elif data_type == "sar_flag":
-            sar_idx = i
-
     with open(_tx_csv, "r") as _rf:
-        reader = csv.reader(_rf)
-        next(reader)  # Skip header
+        reader = csv.DictReader(_rf)
+        if not reader.fieldnames:
+            raise ValueError("Transaction CSV %s has no header" % _tx_csv)
+        orig_field = _field_lookup(reader.fieldnames, "orig_acct", "orig_id", "orig", "nameorig", "src", "from", "payer", "sender")
+        bene_field = _field_lookup(reader.fieldnames, "bene_acct", "dest_id", "dest", "namedest", "dst", "to", "receiver")
+        amt_field = _field_lookup(reader.fieldnames, "amount", "base_amt", "amt", "baseamount", "transactionamount")
+        date_field = _field_lookup(reader.fieldnames, "tran_timestamp", "timestamp", "date", "step", "trans_date", "txdate")
+        type_field = _field_lookup(reader.fieldnames, "tx_type", "transaction_type", "type", "ttype")
+        sar_field = _field_lookup(reader.fieldnames, "is_sar", "sar_flag", "issar")
+        alert_field = _field_lookup(reader.fieldnames, "alert_id", "alertid")
+
+        required_fields = [
+            ("origin", orig_field),
+            ("destination", bene_field),
+            ("amount", amt_field),
+            ("date", date_field),
+        ]
+        missing = [name for name, field in required_fields if not field]
+        if missing:
+            raise ValueError("Transaction CSV %s missing required columns: %s" % (_tx_csv, ", ".join(missing)))
 
         for row in reader:
-            orig = row[orig_idx]
-            bene = row[bene_idx]
-            tx_type = row[type_idx]
-            amount = float(row[amt_idx])
-            date_str = row[date_idx].split("T")[0]
-            date = datetime.strptime(date_str, "%Y-%m-%d")
-            is_sar = row[sar_idx].lower() == "true"
-            _g.add_edge(orig, bene, amount=amount, date=date, type=tx_type, is_sar=is_sar)
+            orig = row.get(orig_field)
+            bene = row.get(bene_field)
+            if orig is None or bene is None:
+                continue
+            try:
+                amount = float(row.get(amt_field, 0.0) or 0.0)
+            except ValueError:
+                continue
+            date = _parse_date_value(row.get(date_field), base_date)
+            tx_type = row.get(type_field, "") if type_field else ""
+            is_sar = _as_bool(row.get(sar_field, False)) if sar_field else False
+            alert_id = row.get(alert_field) if alert_field else None
+
+            if orig not in _g:
+                _g.add_node(orig, bank_id="UNKNOWN", is_sar=False)
+            if bene not in _g:
+                _g.add_node(bene, bank_id="UNKNOWN", is_sar=False)
+
+            _g.add_edge(orig, bene, amount=amount, date=date, type=tx_type, is_sar=is_sar, alert_id=alert_id)
 
     return _g
 
@@ -243,110 +351,120 @@ def plot_wcc_distribution(_g, _plot_img):
     plt.savefig(_plot_img)
 
 
-def plot_alert_stat(_alert_acct_csv, _alert_tx_csv, _schema, _plot_img):
+def plot_alert_stat(_alert_acct_csv, _alert_tx_csv, _schema, _plot_img, _base_date, tx_log_csv=None):
+
+    if isinstance(_base_date, str):
+        base_date = datetime.strptime(_base_date, "%Y-%m-%d")
+    else:
+        base_date = _base_date
+
+    if not os.path.exists(_alert_acct_csv):
+        print("Alert member file %s not found. Skipping alert plots." % _alert_acct_csv)
+        return
 
     alert_member_count = Counter()
     alert_tx_count = Counter()
     alert_init_amount = dict()  # Initial amount
     alert_amount_list = defaultdict(list)  # All amount list
     alert_dates = defaultdict(list)
-    alert_sar_flag = defaultdict(bool)
-    alert_types = dict()
     label_alerts = defaultdict(list)  # label -> alert IDs
 
-    alert_idx = None
-    amt_idx = None
-    date_idx = None
-    type_idx = None
-    # bank_idx = None
-    sar_idx = None
-
-    acct_schema = _schema["alert_member"]
-    for i, col in enumerate(acct_schema):
-        data_type = col.get("dataType")
-        if data_type == "alert_id":
-            alert_idx = i
-        elif data_type == "alert_type":
-            type_idx = i
-        # elif data_type == "model_id":
-        #     bank_idx = i
-        elif data_type == "sar_flag":
-            sar_idx = i
-
     with open(_alert_acct_csv, "r") as _rf:
-        reader = csv.reader(_rf)
-        next(reader)
+        reader = csv.DictReader(_rf)
+        if not reader.fieldnames:
+            print("Alert member file %s has no header. Skipping" % _alert_acct_csv)
+            return
+        alert_field = _field_lookup(reader.fieldnames, "alert_id", "alertid")
+        type_field = _field_lookup(reader.fieldnames, "alert_type", "reason", "type")
+        sar_field = _field_lookup(reader.fieldnames, "is_sar", "sar_flag", "issar")
+
+        if not alert_field:
+            print("Alert member file %s missing alert ID column. Skipping" % _alert_acct_csv)
+            return
 
         for row in reader:
-            alert_id = row[alert_idx]
-            alert_type = row[type_idx]
-            # bank_id = row[bank_idx]
-            is_sar = row[sar_idx].lower() == "true"
+            alert_id = row.get(alert_field)
+            if alert_id is None:
+                continue
+            alert_type = row.get(type_field) if type_field else "Unknown"
+            is_sar = _as_bool(row.get(sar_field, False)) if sar_field else False
 
             alert_member_count[alert_id] += 1
-            alert_sar_flag[alert_id] = is_sar
-            alert_types[alert_id] = alert_type
-            label = ("SAR" if is_sar else "Normal") + ":" + alert_type
+            label = ("SAR" if is_sar else "Normal") + ":" + (alert_type or "Unknown")
             label_alerts[label].append(alert_id)
 
-    tx_schema = _schema["alert_tx"]
-    for i, col in enumerate(tx_schema):
-        data_type = col.get("dataType")
-        if data_type == "alert_id":
-            alert_idx = i
-        elif data_type == "amount":
-            amt_idx = i
-        elif data_type == "timestamp":
-            date_idx = i
+    tx_source = None
+    if _alert_tx_csv and os.path.exists(_alert_tx_csv):
+        tx_source = _alert_tx_csv
+    elif tx_log_csv and os.path.exists(tx_log_csv):
+        tx_source = tx_log_csv
+    else:
+        print("Alert transaction data not found. Skipping alert plots.")
+        return
 
-    with open(_alert_tx_csv, "r") as _rf:
-        reader = csv.reader(_rf)
-        next(reader)
+    with open(tx_source, "r") as _rf:
+        reader = csv.DictReader(_rf)
+        if not reader.fieldnames:
+            print("Alert transaction file %s has no header. Skipping" % tx_source)
+            return
+        alert_field = _field_lookup(reader.fieldnames, "alert_id", "alertid")
+        amt_field = _field_lookup(reader.fieldnames, "amount", "base_amt", "amt", "baseamount")
+        date_field = _field_lookup(reader.fieldnames, "tran_timestamp", "timestamp", "date", "step")
+
+        if not alert_field or not amt_field or not date_field:
+            print("Alert transaction columns missing in %s. Skipping" % tx_source)
+            return
 
         for row in reader:
-            alert_id = row[alert_idx]
-            amount = float(row[amt_idx])
-            date_str = row[date_idx].split("T")[0]
-            date = datetime.strptime(date_str, "%Y-%m-%d")
+            alert_id = row.get(alert_field)
+            if alert_id is None or alert_id in ("", "-1", -1):
+                continue
+            if alert_id not in alert_member_count:
+                # Skip alerts we don't know about to avoid noise
+                continue
+            try:
+                amount = float(row.get(amt_field, 0.0) or 0.0)
+            except ValueError:
+                continue
+            date = _parse_date_value(row.get(date_field), base_date)
 
             alert_tx_count[alert_id] += 1
-            if alert_id not in alert_init_amount:
-                alert_init_amount[alert_id] = amount
             alert_amount_list[alert_id].append(amount)
             alert_dates[alert_id].append(date)
+            if alert_id not in alert_init_amount:
+                alert_init_amount[alert_id] = amount
 
-    # Scatter plot for all alerts
-    # ax1: Number of member accounts and transaction amount range
-    # ax2: Number of transactions and transaction period
+    if not label_alerts:
+        print("No alert membership data to plot.")
+        return
+
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 12))
     cmap = plt.get_cmap("tab10")
     for i, (label, alerts) in enumerate(label_alerts.items()):
-        color = cmap(i)
-        x = [alert_member_count[a] for a in alerts]
-        y_init = np.array([alert_init_amount[a] for a in alerts])
-        # y_med = np.array([np.median(alert_amount_list[a]) for a in alerts])
-        # y_min = np.array([min(alert_amount_list[a]) for a in alerts])
-        # y_max = np.array([max(alert_amount_list[a]) for a in alerts])
-        # y_err = [y_med - y_min, y_max - y_med]
+        color = cmap(i % cmap.N)
+        x_accounts = [alert_member_count.get(a, 0) for a in alerts]
+        y_init = np.array([alert_init_amount.get(a, 0.0) for a in alerts])
 
-        ax1.scatter(x, y_init, s=50, color=color, label=label, edgecolors="none")
+        ax1.scatter(x_accounts, y_init, s=50, color=color, label=label, edgecolors="none")
         for j, alert_id in enumerate(alerts):
-            ax1.annotate(alert_id, (x[j], y_init[j]))
-        # ax1.scatter(x, y_med, s=50, color=color, label=label, edgecolors="none")
-        # ax1.errorbar(x, y_med, yerr=y_err, ecolor=color, ls="none")
-        # for j, alert_id in enumerate(alerts):
-        #     ax1.annotate(alert_id, (x[j], y_med[j]))
+            ax1.annotate(alert_id, (x_accounts[j], y_init[j]))
 
-        x = [alert_tx_count[a] for a in alerts]
-        y_period = [(max(alert_dates[a]) - min(alert_dates[a])).days + 1
-                    for a in alerts]
-        ax2.scatter(x, y_period, s=100, color=color, label=label, edgecolors="none")
+        x_tx = [alert_tx_count.get(a, 0) for a in alerts]
+        y_period = []
+        for a in alerts:
+            dates = alert_dates.get(a, [])
+            if dates:
+                period = (max(dates) - min(dates)).days + 1
+            else:
+                period = 0
+            y_period.append(period)
+
+        ax2.scatter(x_tx, y_period, s=100, color=color, label=label, edgecolors="none")
         for j, alert_id in enumerate(alerts):
-            ax2.annotate(alert_id, (x[j], y_period[j]))
+            ax2.annotate(alert_id, (x_tx[j], y_period[j]))
 
     ax1.set_xlabel("Number of accounts per alert")
     ax1.set_ylabel("Initial transaction amount")
-    # ax1.set_ylabel("Min/Median/Max transaction amount")
     ax1.legend()
     ax2.set_xlabel("Number of transactions per alert")
     ax2.set_ylabel("Transaction period")
@@ -592,19 +710,22 @@ if __name__ == "__main__":
 
     sim_name = argv[2] if len(argv) >= 3 else conf["general"]["simulation_name"]
     work_dir = os.path.join(conf["output"]["directory"], sim_name)
-    acct_csv = conf["output"]["accounts"]
-    tx_csv = conf["output"]["transactions"]
-    acct_path = os.path.join(work_dir, acct_csv)
-    tx_path = os.path.join(work_dir, tx_csv)
+    os.makedirs(work_dir, exist_ok=True)
 
-    tmp_dir = conf["temporal"]["directory"]
-    output_dir = conf["output"]["directory"]
+    try:
+        acct_path = _resolve_data_path(conf, sim_name, "accounts")
+    except FileNotFoundError as exc:
+        print(str(exc))
+        sys.exit(1)
+
+    tx_log_path = _resolve_data_path(conf, sim_name, "transaction_log", required=False)
+    tx_path = tx_log_path or _resolve_data_path(conf, sim_name, "transactions")
     if not os.path.exists(tx_path):
         print("Transaction list CSV file %s not found." % tx_path)
         exit(1)
 
     print("Constructing transaction graph")
-    g = construct_graph(acct_path, tx_path, schema)
+    g = construct_graph(acct_path, tx_path, schema, conf["general"].get("base_date", "2017-01-01"))
 
     v_conf = conf["visualizer"]
     deg_plot = v_conf["degree"]
@@ -628,13 +749,33 @@ if __name__ == "__main__":
     print("Plot AML typology count")
     plot_aml_rule(param_path, plot_path)
 
-    alert_acct_csv = conf["output"]["alert_members"]
-    alert_tx_csv = conf["output"]["alert_transactions"]
-    alert_acct_path = os.path.join(work_dir, alert_acct_csv)
-    alert_tx_path = os.path.join(work_dir, alert_tx_csv)
+    alert_acct_path = _resolve_data_path(
+        conf,
+        sim_name,
+        "alert_members",
+        fallback_key="alert_members",
+        required=False,
+    )
+    alert_tx_path = _resolve_data_path(
+        conf,
+        sim_name,
+        "alert_transactions",
+        fallback_key="alert_transactions",
+        required=False,
+    )
 
-    print("Plot alert attribute distributions")
-    plot_alert_stat(alert_acct_path, alert_tx_path, schema, os.path.join(work_dir, "alert_dist.png"))
+    if alert_acct_path:
+        print("Plot alert attribute distributions")
+        plot_alert_stat(
+            alert_acct_path,
+            alert_tx_path,
+            schema,
+            os.path.join(work_dir, "alert_dist.png"),
+            conf["general"].get("base_date", "2017-01-01"),
+            tx_log_csv=tx_log_path,
+        )
+    else:
+        print("Alert member file not found. Skipping alert distribution plots.")
 
     print("Plot transaction count per date")
     plot_tx_count(g, os.path.join(work_dir, count_plot))
@@ -642,14 +783,14 @@ if __name__ == "__main__":
     print("Plot clustering coefficient of the transaction graph")
     plot_clustering_coefficient(g, os.path.join(work_dir, cc_plot))
 
-    dia_log = conf["output"]["diameter_log"]
-    dia_path = os.path.join(work_dir, dia_log)
-    if os.path.exists(dia_path):
+    dia_path = _resolve_data_path(conf, sim_name, "diameter_log", required=False)
+    if dia_path and os.path.exists(dia_path):
         plot_img = os.path.join(work_dir, dia_plot)
         print("Plot diameter of the transaction graph")
         plot_diameter(dia_path, plot_img)
     else:
-        print("Diameter log file %s not found." % dia_path)
+        missing_label = dia_path if dia_path else "<not provided>"
+        print("Diameter log file %s not found." % missing_label)
 
     print("Plot bank-to-bank transaction counts")
     plot_bank2bank_count(g, os.path.join(work_dir, b2b_plot))

@@ -2,6 +2,13 @@
 Generate a base transaction graph used in the simulator
 """
 
+import math
+import fractions
+
+# networkx==1.11 still references fractions.gcd; add alias for Python 3.9+
+if not hasattr(fractions, "gcd"):
+    fractions.gcd = math.gcd
+
 import networkx as nx
 import numpy as np
 import itertools
@@ -16,6 +23,7 @@ import cProfile
 
 
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from amlsim.nominator import Nominator
 from amlsim.normal_model import NormalModel
 
@@ -63,6 +71,22 @@ def parse_flag(value):
     :return: True if the value is equal to "true" (case-insensitive), otherwise False
     """
     return type(value) == str and value.lower() == "true"
+
+
+_original_random_sample = random.sample
+
+
+def sample_population(population, k, counts=None):
+    """Return k unique samples from any iterable population."""
+    if not isinstance(population, Sequence):
+        population = tuple(population)
+    if counts is None:
+        return _original_random_sample(population, k)
+    return _original_random_sample(population, k, counts)
+
+
+# Monkey-patch random.sample so any downstream code benefits from the compatibility wrapper.
+random.sample = sample_population
 
 
 def get_positive_or_none(value):
@@ -232,7 +256,7 @@ class TransactionGenerator:
         self.input_dir = input_conf["directory"]  # The directory name of input files
         self.account_file = input_conf["accounts"]  # Account list file
         self.alert_file = input_conf["alert_patterns"]  # AML typology definition file
-        self.normal_models_file = input_conf["normal_models"] # Normal models definition file
+        self.normal_models_file = input_conf.get("normal_models", "normalModels.csv")  # Normal models definition file
         self.degree_file = input_conf["degree"]  # Degree distribution file
         self.type_file = input_conf["transaction_type"]  # Transaction type
         self.is_aggregated = input_conf["is_aggregated_accounts"]  # Flag whether the account list is aggregated
@@ -339,9 +363,9 @@ class TransactionGenerator:
         if bank_id in self.bank_to_accts:  # Choose members from the same bank as the main account
             bank_accts = self.bank_to_accts[bank_id]
             main_candidates = self.hubs & bank_accts
-            main_acct = random.sample(main_candidates, 1)[0]
+            main_acct = sample_population(main_candidates, 1)[0]
             self.remove_typology_candidate(main_acct)
-            sub_accts = random.sample(bank_accts, num - 1)
+            sub_accts = sample_population(bank_accts, num - 1)
             for n in sub_accts:
                 self.remove_typology_candidate(n)
 
@@ -350,10 +374,10 @@ class TransactionGenerator:
 
         elif bank_id == "":  # Choose members from all accounts
             self.check_hub_exists()
-            main_acct = random.sample(self.hubs, 1)[0]
+            main_acct = sample_population(self.hubs, 1)[0]
             self.remove_typology_candidate(main_acct)
 
-            sub_accts = random.sample(self.acct_to_bank.keys(), num - 1)
+            sub_accts = sample_population(self.acct_to_bank.keys(), num - 1)
             for n in sub_accts:
                 self.remove_typology_candidate(n)
             members = [main_acct] + sub_accts
@@ -891,7 +915,7 @@ class TransactionGenerator:
             :return: main account ID and bank ID
             """
             self.check_hub_exists()
-            _main_acct = random.sample(self.hubs, 1)[0]
+            _main_acct = random.sample(tuple(self.hubs), 1)[0]
             _main_bank_id = self.acct_to_bank[_main_acct]
             self.remove_typology_candidate(_main_acct)
             add_node(_main_acct, _main_bank_id)

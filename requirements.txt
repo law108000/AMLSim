@@ -1,7 +1,13 @@
 numpy
 networkx==1.11
 matplotlib>=3.1.2
+pandas
 pygraphviz
 powerlaw
 python-dateutil
 Faker
+torch
+transformers>=4.40
+einops
+tqdm
+scikit-learn
