@@ -245,11 +245,12 @@ def load_baseline_metrics(model_dir: Path, simulation_name: str) -> Dict[str, fl
 
 def main():
     args = parse_args()
+    freq = args.freq.lower()
     tx = load_transactions(args.outputs_dir, args.simulation_name)
     candidate_accounts = select_accounts(tx, args.max_accounts)
     tx = tx[tx["orig_acct"].isin(candidate_accounts) | tx["bene_acct"].isin(candidate_accounts)].copy()
-    time_index = build_time_index(tx, args.freq)
-    series, account_to_idx, time_to_idx, tx = build_account_series(tx, candidate_accounts, time_index, args.freq)
+    time_index = build_time_index(tx, freq)
+    series, account_to_idx, time_to_idx, tx = build_account_series(tx, candidate_accounts, time_index, freq)
     train_steps, eval_steps = compute_windows(len(time_index), args.eval_fraction, args.forecast_horizon)
 
     model = AutoModel.from_pretrained(args.falcon_path, trust_remote_code=True)
