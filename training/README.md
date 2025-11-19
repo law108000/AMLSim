@@ -29,3 +29,24 @@ After the run completes you will see:
 - `training/models/<simulation_name>_metrics.json` – ROC AUC, PR AUC, class count, and the full classification report.
 
 You can load the model later using `joblib.load()` and call `predict`/`predict_proba` on new AMLSim-style transaction rows prepared with the same schema.
+
+## Evaluate Falcon-TST on AMLSim
+
+`try_tst_model.py` uses the locally cloned `training/falcon-tst` weights to forecast per-account hourly activity with Falcon-TST_Large. Residuals between the forecasted and actual outgoing volumes are treated as anomaly scores for the final portion of the timeline, and the script reports ROC-AUC/PR metrics against the ground-truth `is_sar` labels (restricted to accounts with predictions).
+
+```bash
+python3 training/try_tst_model.py \
+	--simulation-name sample \
+	--max-accounts 50 \
+	--forecast-horizon 96
+```
+
+Useful flags:
+
+- `--falcon-path`: path to the downloaded Falcon-TST repo (default `training/falcon-tst`).
+- `--max-accounts`: limit to the most active origin accounts to keep inference manageable (set to `-1` for all accounts).
+- `--forecast-horizon`: number of future bins (at the chosen resampling frequency) to evaluate.
+- `--eval-fraction`: alternative to `--forecast-horizon`, specifying what portion of the timeline becomes the evaluation window.
+- `--freq`: resampling frequency (default `1H`).
+
+Outputs will be written to `training/models/<simulation_name>_falcon_tst_metrics.json`, and the script prints a comparison against the logistic baseline when available.
