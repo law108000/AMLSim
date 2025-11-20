@@ -1,0 +1,38 @@
+parent.0 = @sim.util.opt.Worker mason.master.params
+
+num-mason-properties = 5
+mason-property.0 = Avoidance
+mason-property.1 = Cohesion
+mason-property.2 = Consistency
+mason-property.3 = Momentum
+mason-property.4 = Randomness
+
+# MASON properties passed in as an array
+# If you uncheck this, you don't need to specify the mason-property.0, mason-property.1,
+# etc. parameters above -- instead all five parameters will be passed in as an array
+# of doubles.  The genome will be set to 5 in size and you are welcome to specify min-gene
+# and max-gene values for each gene etc.  
+#mason-properties-as-array = true
+
+
+mason-steps = 1000
+mason-num-trials = 1
+mason-objectives = 1
+mason-rebuild-model = false
+mason-class = sim.app.flockers.Flockers
+
+pop.subpop.0.size = 24
+generations = 30
+
+#pop.subpop.0.file = $in.stat
+#pop.subpop.0.extra-behavior = wrap
+
+pop.subpop.0.species.mutation-stdev = 0.1
+
+# Multiobjective
+# (important for algorithms that normalize the objective scales relative to each other)
+# I don't think NSGA2 cares
+multi.fitness.max             = 200
+multi.fitness.min             = 0
+stat.do-hypervolume =  false
+

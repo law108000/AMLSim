@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda" if torch.cuda.is_available() else "cpu",
+        default="cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"),
         help="Torch device to run Falcon-TST on.",
     )
     parser.add_argument(
@@ -252,6 +252,8 @@ def main():
     time_index = build_time_index(tx, freq)
     series, account_to_idx, time_to_idx, tx = build_account_series(tx, candidate_accounts, time_index, freq)
     train_steps, eval_steps = compute_windows(len(time_index), args.eval_fraction, args.forecast_horizon)
+
+    print(f"Using device: {args.device}")
 
     model = AutoModel.from_pretrained(args.falcon_path, trust_remote_code=True)
     scores, score_mask = forecast_accounts(model, series, train_steps, eval_steps, args.device)

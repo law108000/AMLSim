@@ -1,7 +1,23 @@
 ## AMLSim Quick HOWTO
 
 ### Prerequisites
-- Install Java 8 and download required jars into `jars/`. If using Maven, only `jars/mason.20.jar` needs to be copied and registered via `mvn install:install-file`.
+- Install Java 8 and download required jars into `jars/`. When using Maven you specifically need the MASON toolkit v20, which is no longer published to Maven Central. Fetch it from the official GitHub release (`https://github.com/eclab/mason/releases/tag/v20`), build it once, and register it locally:
+
+```bash
+cd /tmp
+git clone --depth 1 --branch v20 https://github.com/eclab/mason.git
+cd mason/mason
+mvn -B clean install
+mvn install:install-file \
+	-Dfile=target/mason-20.jar \
+	-DgroupId=cs.gmu.edu.eclab \
+	-DartifactId=mason \
+	-Dversion=20 \
+	-Dpackaging=jar
+cp target/mason-20.jar /workspaces/AMLSim/jars/
+```
+
+After this one-time setup Maven resolves `cs.gmu.edu.eclab:mason:20` locally and `scripts/build_AMLSim.sh` runs without internet access to GMU mirrors.
 - Ensure Python 3.7 is available and install dependencies:
 
 ```bash

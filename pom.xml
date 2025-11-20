@@ -40,7 +40,7 @@
         </dependency>
 
         <dependency>
-            <groupId>mason</groupId>
+            <groupId>cs.gmu.edu.eclab</groupId>
             <artifactId>mason</artifactId>
             <version>20</version>
         </dependency>

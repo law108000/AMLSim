@@ -1,0 +1,42 @@
+mason/target/
+contrib/geomason/target/
+*.class
+*.aux
+*.idx
+*.log
+*.out
+*.toc
+*.DS_Store
+*.project
+*.classpath
+*.settings
+# Eclipse
+.classpath
+.project
+.settings/
+# Intellij
+.idea/
+*.iml
+*.iws
+# Mac
+.DS_Store
+# Maven
+log/
+target/
+geomason/repository/jars
+geomason/repository/edu
+contrib/geomason/repository/edu
+contrib/geomason/repository/jars/dadaabData.jar
+contrib/geomason/repository/jars/ebolaData.jar
+contrib/geomason/repository/jars/hotspotsData.jar
+contrib/geomason/repository/jars/refugeeData.jar
+contrib/geomason/repository/jars/swiselib.jar
+kiberaData.jar
+mason/bin
+contrib/geomason/repository/jars/ConflictDiamondsData.jar
+contrib/geomason/repository/jars/RiftlandData.jar
+contrib/geomason/repository/jars/cityMigrationData.jar
+OmolandCAData.jar
+contrib/geomason/repository/jars/commons-math3-3.6.1.jar
+contrib/geomason/repository/jars/jts-1.13.jar
+contrib/geomason/repository/jars/socialnets-1.0.jar

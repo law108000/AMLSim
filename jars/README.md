@@ -2,8 +2,8 @@
 Please download external jar files from the following sites and put them under this directory.
 
 
-- [MASON](https://cs.gmu.edu/~eclab/projects/mason/) version 20
-  - Download "mason20.zip" from the homepage and extract the jar file.
+- [MASON](https://github.com/eclab/mason/releases/tag/v20) version 20
+  - The original GMU download mirror is now offline. Grab the `v20` release from GitHub (zip or source), build it with `mvn clean install`, and copy `target/mason-20.jar` into this directory. Install it into your local Maven repo with `mvn install:install-file -DgroupId=cs.gmu.edu.eclab -DartifactId=mason -Dversion=20 -Dpackaging=jar -Dfile=./jars/mason-20.jar` so AMLSim's build can resolve it offline.
 - [Commons-Math](http://commons.apache.org/proper/commons-math/download_math.cgi) version 3.6.1
   - Download "commons-math3-3.6.1-bin.tar.gz" and extract the following jar files.
     - commons-math3-3.6.1.jar
